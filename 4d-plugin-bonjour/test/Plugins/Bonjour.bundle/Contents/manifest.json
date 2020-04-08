@@ -1,0 +1,31 @@
+{
+	"name": "Bonjour",
+	"id": 20000,
+	"commands": [
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Publish(&J):J",
+            "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Status(&J):J",
+            "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Discover(&J):J",
+            "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Update(&J):J",
+            "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Clear(&J):J",
+            "threadSafe": true
+        }
+	]
+}
