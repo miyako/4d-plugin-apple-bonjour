@@ -252,10 +252,10 @@
 		"stamp": "2020-04-08T10:31:20.095Z"
 	},
 	"Sources/Methods/TEST_publish_1.4dm": {
-		"startSelection": 0,
-		"endSelection": 0,
-		"firstSelectedLine": 5,
-		"lastSelectedLine": 5,
+		"startSelection": 17,
+		"endSelection": 17,
+		"firstSelectedLine": 6,
+		"lastSelectedLine": 6,
 		"folding": [],
 		"bookmarks": [],
 		"stamp": "2020-04-17T17:46:47.896Z"
@@ -263,19 +263,19 @@
 	"Sources/Methods/TEST_receive_1.4dm": {
 		"startSelection": 0,
 		"endSelection": 0,
-		"firstSelectedLine": 8,
+		"firstSelectedLine": 9,
 		"lastSelectedLine": 9,
 		"folding": [],
 		"bookmarks": [],
 		"stamp": "2020-04-17T17:47:39.786Z"
 	},
 	"Sources/Methods/TEST_send_1.4dm": {
-		"startSelection": 0,
-		"endSelection": 0,
-		"firstSelectedLine": 1,
-		"lastSelectedLine": 1,
+		"startSelection": 33,
+		"endSelection": 33,
+		"firstSelectedLine": 24,
+		"lastSelectedLine": 24,
 		"folding": [],
 		"bookmarks": [],
-		"stamp": "2020-04-17T18:17:41.665Z"
+		"stamp": "2020-04-17T18:34:24.695Z"
 	}
 }

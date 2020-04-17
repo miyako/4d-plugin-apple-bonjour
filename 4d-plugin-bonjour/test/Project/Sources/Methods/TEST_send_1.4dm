@@ -25,12 +25,6 @@ If (Bool:C1537(<>P.success))
 				
 				$status:=Bonjour Send (<>D;$data)
 				
-				If (Not:C34($status.success))
-					
-					TRACE:C157
-					
-				End if 
-				
 			End if 
 			
 		End if 

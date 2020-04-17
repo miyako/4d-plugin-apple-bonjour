@@ -198,20 +198,20 @@
 		"height": 637
 	},
 	"Sources/Methods/TEST_publish_1.4dm": {
-		"left": 996,
-		"top": 337,
+		"left": 150,
+		"top": 481,
 		"width": 659,
 		"height": 499
 	},
 	"Sources/Methods/TEST_receive_1.4dm": {
-		"left": 557,
-		"top": 372,
-		"width": 714,
-		"height": 637
+		"left": 333,
+		"top": 130,
+		"width": 456,
+		"height": 350
 	},
 	"Sources/Methods/TEST_send_1.4dm": {
-		"left": 1002,
-		"top": 199,
+		"left": 40,
+		"top": 308,
 		"width": 774,
 		"height": 715
 	}

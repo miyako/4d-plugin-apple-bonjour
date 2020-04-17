@@ -963,6 +963,8 @@ static void socket_callout(CFSocketRef s,
         data = [[NSData alloc]initWithBytes:buffer.data() length:buffer.size()];
         
         buffers.erase(it);
+        
+        _remaining--;
     }
     
     *remaining = _remaining;
