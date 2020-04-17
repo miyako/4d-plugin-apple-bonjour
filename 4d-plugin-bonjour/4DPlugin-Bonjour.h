@@ -23,14 +23,69 @@
 
 #pragma mark -
 
-void Bonjour_Publish(PA_PluginParameters params);
-void Bonjour_Status(PA_PluginParameters params);
-void Bonjour_Discover(PA_PluginParameters params);
-void Bonjour_Update(PA_PluginParameters params);
-void Bonjour_Clear(PA_PluginParameters params);
+static void Bonjour_Publish(PA_PluginParameters params);
+static void Bonjour_Status(PA_PluginParameters params);
+static void Bonjour_Discover(PA_PluginParameters params);
+static void Bonjour_Update(PA_PluginParameters params);
+static void Bonjour_Clear(PA_PluginParameters params);
+static void Bonjour_Send(PA_PluginParameters params);
+static void Bonjour_Receive(PA_PluginParameters params);
 
-void g_bonjour_delegates_clear();
+static void g_bonjour_delegates_clear();
 
 #define DEFAULT_RESOLVE_TIMEOUT 10.0f
+#define BUFFER_MAX_SIZE 99
+#define BUFFER_BLOCK_SIZE 1024
+
+@interface Bonjour_Browser_Delegate : NSObject <NSNetServiceBrowserDelegate,NSNetServiceDelegate,NSStreamDelegate>
+{
+    Json::Value props;
+    std::vector<unsigned char>buffer;
+    
+    NSInputStream *inputStream;
+    NSOutputStream *outputStream;
+    NSNetServiceBrowser *netServiceBrowser;
+    
+    NSMutableArray *services;
+    NSTimeInterval timeout;
+}
+
+- (void)copyServiceBrowserProperties:(NSNetServiceBrowser *)service;
+- (void)copyServiceBrowserErrors:(NSDictionary<NSString *,NSNumber *> *)errorDict;
+- (void)start;
+- (void)close;
+- (PA_ObjectRef)getProperties;
+- (PA_CollectionRef)getServices;
+- (BOOL)isReady;
+
+@end
+
+#define CREATE_CONNECTION_STREAM 1
+
+@interface Bonjour_Delegate : NSObject <NSNetServiceDelegate,NSStreamDelegate>
+{
+    Json::Value props;
+    std::vector< std::vector<unsigned char> >buffers;
+    
+    NSInputStream *inputStream;
+    NSOutputStream *outputStream;
+    
+    NSNetService *netService;
+    
+    CFSocketRef _ipv4socket;
+    CFSocketRef _ipv6socket;
+    CFRunLoopSourceRef _rls_ipv4socket;
+    CFRunLoopSourceRef _rls_ipv6socket;
+}
+
+- (void)copyServiceProperties:(NSNetService *)service;
+- (void)copyServiceErrors:(NSDictionary<NSString *,NSNumber *> *)errorDict;
+- (void)start;
+- (void)close;
+- (PA_ObjectRef)getProperties;
+- (NSData *)getData:(size_t *)remaining;
+- (void)bind:(int)fd;
+
+@end
 
 #endif /* PLUGIN_BONJOUR_H */

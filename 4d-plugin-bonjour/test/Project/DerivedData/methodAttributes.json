@@ -21,6 +21,9 @@
 				"preemptive": "capable"
 			}
 		},
+		"TEST_publish_1": {
+			"timeStamp": "2020-04-17T17:46:47.896Z"
+		},
 		"update_discovery_ui": {
 			"timeStamp": "2020-04-08T08:45:53.834Z",
 			"attributes": {
@@ -65,12 +68,18 @@
 				"preemptive": "capable"
 			}
 		},
+		"TEST_receive_1": {
+			"timeStamp": "2020-04-17T17:47:39.786Z"
+		},
 		"generate_project_plugin_stub": {
 			"timeStamp": "2019-07-23T08:36:58.000Z",
 			"attributes": {
 				"invisible": true,
 				"preemptive": "capable"
 			}
+		},
+		"TEST_send_1": {
+			"timeStamp": "2020-04-17T18:17:41.665Z"
 		},
 		"generate_project_source": {
 			"timeStamp": "2019-07-02T14:36:13.000Z",

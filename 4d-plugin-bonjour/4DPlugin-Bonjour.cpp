@@ -21,9 +21,7 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case kDeinitPlugin:
                 g_bonjour_delegates_clear();
                 break;
-                
-                // --- Bonjour
-                
+                                
             case 1 :
                 Bonjour_Publish(params);
                 break;
@@ -39,7 +37,12 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case 5 :
                 Bonjour_Clear(params);
                 break;
-                
+            case 6 :
+                Bonjour_Send(params);
+                break;
+            case 7 :
+                Bonjour_Receive(params);
+                break;
         }
 
 	}
@@ -51,20 +54,9 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 
 #pragma mark -
 
-@interface Bonjour_Browser_Delegate : NSObject <NSNetServiceBrowserDelegate,NSNetServiceDelegate>
-{
-    Json::Value props;
-    NSNetServiceBrowser *serv;
-    NSMutableArray *services;
-    NSTimeInterval timeout;
-}
-- (void)copyServiceBrowserProperties:(NSNetServiceBrowser *)service;
-- (void)copyServiceBrowserErrors:(NSDictionary<NSString *,NSNumber *> *)errorDict;
-- (void)start;
-- (PA_ObjectRef)getProperties;
-@end
-
 @implementation Bonjour_Browser_Delegate
+
+//@synthesize netServiceBrowser = _netServiceBrowser;
 
 - (void)copyServiceBrowserProperties:(NSNetServiceBrowser *)service
 {
@@ -76,6 +68,143 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
                 
         props.removeMember("errors");
         
+    }
+    
+}
+
+- (void)closeOutput
+{
+    if(outputStream) {
+        [outputStream setDelegate:nil];
+        [outputStream close];
+        [outputStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [outputStream release];
+    }
+    
+    outputStream = nil;
+}
+
+- (void)closeInput
+{
+    if(inputStream) {
+        [inputStream setDelegate:nil];
+        [inputStream close];
+        [inputStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [inputStream release];
+    }
+    
+    inputStream = nil;
+}
+
+- (void)close
+{
+    [self closeInput];
+    
+    [self closeOutput];
+    
+    props["isOpen"] = false;
+}
+
+- (void)stream:(NSStream *)stream
+   handleEvent:(NSStreamEvent)event
+{
+    switch(event) {
+            
+        case NSStreamEventOpenCompleted:
+                        
+            break;
+            
+        case NSStreamEventHasBytesAvailable:;
+            
+            break;
+            
+        case NSStreamEventEndEncountered:;
+            [self close];
+            break;
+            
+        case NSStreamEventErrorOccurred:
+             [self close];
+            break;
+            
+        case NSStreamEventHasSpaceAvailable:
+            if (stream == outputStream) {
+                
+                NSLog(@"client:write:start");
+                
+                NSUInteger remain = buffer.size();
+                const uint8 *p = (const uint8 *)&buffer[0];
+                size_t w = 0;
+                
+                while (remain) {
+                    
+                    NSInteger bytesWritten = [outputStream write:(const uint8 *)p maxLength:remain];
+                    
+                    if (bytesWritten > 0) {
+                        
+                        remain -= bytesWritten;
+                        p += bytesWritten;
+                        w += bytesWritten;
+                        
+                    } else {
+                        [self close];
+                    }
+                    
+                    break;
+                }
+                
+                NSLog(@"client:write:total:%ld", w);
+                
+                buffer.resize(0);
+                
+                [self close];
+
+            }
+            break;
+ 
+        case NSStreamEventNone:
+            
+            break;
+        default:
+            break;
+    }
+}
+
+- (void)send:(NSData *)data toService:(NSString *)name byHost:(NSString *)hostName
+{
+    
+    if(!(props["isOpen"].asBool())) {
+        
+        for(NSNetService *service in services) {
+            
+            if(service) {
+                
+                if(([service.name isEqualTo:name]) && ([service.hostName isEqualTo:hostName])) {
+                    
+                    buffer.resize([data length]);
+                    memcpy(&buffer[0], [data bytes], [data length]);
+                    
+                    if([service getInputStream:&inputStream outputStream:&outputStream]) {
+                        
+                        if(outputStream) {
+                            [outputStream setDelegate:self];
+                            [outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+                            [outputStream open];
+                        }
+                        
+                        if(inputStream) {
+                            [inputStream  setDelegate:self];
+                            [inputStream  scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+                            [inputStream  open];
+                        }
+                        
+                    }else{
+                        NSLog(@"failed!getInputStream:outputStream:");
+                    }
+                }
+            }
+        }
+        
+        props["isOpen"] = true;
     }
     
 }
@@ -101,20 +230,32 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 
 - (void)start {
     
-    if(serv) {
-        [serv setDelegate:self];
-        [serv scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+    if(!(props["isStarted"].asBool())) {
+        
+        inputStream = nil;
+        outputStream = nil;
+        
+        if(netServiceBrowser) {
+            [netServiceBrowser setDelegate:self];
+            [netServiceBrowser scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        }
+        props["isStarted"] = true;
     }
+
 }
 
 - (id)initWithServiceBrowser:(NSNetServiceBrowser *)service timeout:(NSTimeInterval)interval
 {
     if(!(self = [super init])) return self;
         
-    serv = service;
+    netServiceBrowser = [service retain];
+    
     timeout = interval;
     
     props = Json::Value(Json::objectValue);
+    
+    props["isStarted"] = false;
+    props["isOpen"] = false;
     
     [self copyServiceBrowserProperties:service];
 
@@ -125,12 +266,14 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 
 - (void)dealloc
 {
-    if(serv) {
-        [serv stop];
-        [serv setDelegate:nil];
-        [serv release];
-        serv = nil;
+    if(netServiceBrowser) {
+        [netServiceBrowser stop];
+        [netServiceBrowser setDelegate:nil];
+        [netServiceBrowser removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [netServiceBrowser release];
     }
+    
+    netServiceBrowser = nil;
     
     [services release];
     services = nil;
@@ -138,17 +281,14 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
     [super dealloc];
 }
 
-- (PA_ObjectRef)getProperties
+- (PA_CollectionRef)getServices
 {
-    PA_ObjectRef properties = PA_CreateObject();
-    
-    ob_set_b(properties, L"includesPeerToPeer", props["includesPeerToPeer"].asBool());
+    PA_CollectionRef services = PA_CreateCollection();
     
     if(props.isMember("services")) {
-        
-        PA_CollectionRef services = PA_CreateCollection();
-        
+
         Json::Value _services = props["services"];
+        
         if (_services.isArray()) {
             for (Json::ValueIterator it = _services.begin(); it != _services.end(); ++it)
             {
@@ -215,11 +355,24 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
                 
             }
         }
-        ob_set_c(properties, L"services", services);
+        
     }
     
-        
+    return services;
+}
+
+- (PA_ObjectRef)getProperties
+{
+    PA_ObjectRef properties = PA_CreateObject();
+    
+    ob_set_b(properties, L"includesPeerToPeer", props["includesPeerToPeer"].asBool());
+    
     return properties;
+}
+
+- (BOOL)isReady
+{
+    return !(props["isOpen"].asBool());
 }
 
 - (void)netService:(NSNetService *)sender
@@ -502,18 +655,6 @@ didUpdateTXTRecordData:(NSData *)data
 
 @end
 
-@interface Bonjour_Delegate : NSObject <NSNetServiceDelegate>
-{
-    Json::Value props;
-    NSNetService *serv;
-}
-- (void)copyServiceProperties:(NSNetService *)service;
-- (void)copyServiceErrors:(NSDictionary<NSString *,NSNumber *> *)errorDict;
-- (void)start;
-- (PA_ObjectRef)getProperties;
-- (void)setTXT:(PA_ObjectRef)TXT;
-@end
-
 @implementation Bonjour_Delegate
 
 - (void)copyServiceProperties:(NSNetService *)service
@@ -573,7 +714,7 @@ didUpdateTXTRecordData:(NSData *)data
     ob_set_s(properties, L"type", props["type"].asCString());
     ob_set_s(properties, L"domain", props["domain"].asCString());
     ob_set_s(properties, L"name", props["name"].asCString());
-            
+                
     if(props.isMember("errors")) {
         
         PA_CollectionRef errors = PA_CreateCollection();
@@ -601,41 +742,238 @@ didUpdateTXTRecordData:(NSData *)data
     return properties;
 }
 
+static void socket_callout(CFSocketRef s,
+                           CFSocketCallBackType type,
+                           CFDataRef address,
+                           const void *data,
+                           void *info) {
+    
+    Bonjour_Delegate *bonjour_delegate = (Bonjour_Delegate *)info;
+    int fd = *(int *)data;
+    
+    [bonjour_delegate bind:fd];
+}
+
+- (void)bind:(int)fd
+{
+    CFStreamCreatePairWithSocket(kCFAllocatorDefault, fd, (CFReadStreamRef *)&inputStream, (CFWriteStreamRef *)&outputStream);
+    
+    if (inputStream) {
+        
+        [inputStream setProperty:(id)kCFBooleanTrue forKey:(NSString *)kCFStreamPropertyShouldCloseNativeSocket];
+         inputStream.delegate = self;
+        [inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [inputStream open];
+    }
+            
+    if(outputStream) {
+        [outputStream setProperty:(id)kCFBooleanTrue forKey:(NSString *)kCFStreamPropertyShouldCloseNativeSocket];
+         outputStream.delegate = self;
+        [outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [outputStream open];
+    }
+     
+    if (!inputStream && !outputStream) {
+        close(fd);
+    }
+    
+}
+
 - (id)initWithService:(NSNetService *)service
 {
     if(!(self = [super init])) return self;
         
-    serv = service;
+    netService = [service retain];
     
     props = Json::Value(Json::objectValue);
     
-    [self copyServiceProperties:service];
+    props["isReady"] = false;
+    props["isStarted"] = false;
+    props["isPublished"] = false;
+    
+    [self copyServiceProperties:netService];
     
     return self;
 }
 
 - (void)start {
     
-    if(serv) {
-        [serv setDelegate:self];
-        [serv scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+#if CREATE_CONNECTION_STREAM
+    
+    if(!(props["isReady"].asBool())) {
+        
+            CFSocketContext context = {0, self, NULL, NULL, NULL};
+
+            _ipv4socket = CFSocketCreate(kCFAllocatorDefault, AF_INET,  SOCK_STREAM, 0, kCFSocketAcceptCallBack, socket_callout, &context);
+            _ipv6socket = CFSocketCreate(kCFAllocatorDefault, AF_INET6, SOCK_STREAM, 0, kCFSocketAcceptCallBack, socket_callout, &context);
+            
+            static const int reuse = true;
+            
+            if(_ipv4socket) {
+                if(!setsockopt(CFSocketGetNative(_ipv4socket), SOL_SOCKET, SO_REUSEADDR, (const void *) &reuse, sizeof(reuse))) {
+                    
+                    struct sockaddr_in addr;
+                    memset(&addr, 0, sizeof(addr));
+                    
+                    addr.sin_len = sizeof(addr);
+                    addr.sin_family = AF_INET;
+                    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+                    addr.sin_port = htons(netService.port);
+                    
+                    CFDataRef addressData = CFDataCreate(NULL, (const UInt8 *)&addr, sizeof(addr));
+                    
+                    if (CFSocketSetAddress(_ipv4socket, addressData) == kCFSocketSuccess)
+                    {
+                        _rls_ipv4socket = CFSocketCreateRunLoopSource(kCFAllocatorDefault, _ipv4socket, 0);
+                        CFRunLoopAddSource(CFRunLoopGetCurrent(), _rls_ipv4socket, kCFRunLoopCommonModes);
+                        
+                        props["isReady"] = true;
+                    }
+                    
+                    CFRelease(addressData);
+                }
+            }
+            
+            if(_ipv6socket) {
+                if(!setsockopt(CFSocketGetNative(_ipv6socket), SOL_SOCKET, SO_REUSEADDR, (const void *) &reuse, sizeof(reuse))) {
+                    
+                    struct sockaddr_in6 addr;
+                    memset(&addr, 0, sizeof(addr));
+                    
+                    addr.sin6_len = sizeof(addr);
+                    addr.sin6_family = AF_INET6;
+                    memcpy(&(addr.sin6_addr), &in6addr_any, sizeof(addr.sin6_addr));
+                    addr.sin6_port = htons(netService.port);
+                                
+                    CFDataRef addressData = CFDataCreate(NULL, (const UInt8 *)&addr, sizeof(addr));
+                    
+                    if (CFSocketSetAddress(_ipv6socket, addressData) == kCFSocketSuccess)
+                    {
+                        _rls_ipv6socket = CFSocketCreateRunLoopSource(kCFAllocatorDefault, _ipv6socket, 0);
+                        CFRunLoopAddSource(CFRunLoopGetCurrent(), _rls_ipv6socket, kCFRunLoopCommonModes);
+                                        
+                        props["isReady"] = true;
+                    }
+                    
+                    CFRelease(addressData);
+                }
+            }
+        }
+#else
+    props["isReady"] = true;
+#endif
+        
+    if(props["isReady"].asBool()) {
+    
+        if(!(props["isStarted"].asBool())) {
+            
+            inputStream = nil;
+            outputStream = nil;
+            
+            [netService setDelegate:self];
+            [netService scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+            
+#if CREATE_CONNECTION_STREAM
+            [netService publishWithOptions:NSNetServiceNoAutoRename];
+#else
+            [netService publishWithOptions:NSNetServiceListenForConnections|NSNetServiceNoAutoRename];
+#endif
+
+        }
+  
     }
+         
+}
+
+- (void)closeInput
+{
+    if(inputStream) {
+        [inputStream setDelegate:nil];
+        [inputStream close];
+        [inputStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [inputStream release];
+    }
+    
+    inputStream = nil;
+}
+
+- (void)closeOutput
+{
+    if(outputStream) {
+        [outputStream setDelegate:nil];
+        [outputStream close];
+        [outputStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        [outputStream release];
+    }
+    
+    outputStream = nil;
+}
+
+- (void)close
+{
+    [self closeInput];
+    [self closeOutput];
 }
 
 - (void)dealloc
 {
-    if(serv) {
-        [serv stop];
-        [serv setDelegate:nil];
-        [serv release];
-        serv = nil;
+    [self close];
+    
+    [netService stop];
+    [netService setDelegate:nil];
+    [netService removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+    [netService release];
+    
+    netService = nil;
+        
+    if(_ipv4socket) {
+        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv4socket, kCFRunLoopCommonModes);
+        CFRelease(_rls_ipv4socket);
+        CFSocketInvalidate(_ipv4socket);
+        CFRelease(_ipv4socket);
     }
+    
+    _ipv4socket = nil;
+    
+    if(_ipv6socket) {
+        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv6socket, kCFRunLoopCommonModes);
+        CFRelease(_rls_ipv6socket);
+        CFSocketInvalidate(_ipv6socket);
+        CFRelease(_ipv6socket);
+    }
+    
+    _ipv6socket = nil;
     
     [super dealloc];
 }
 
-- (void)setData:(CUTF8String)json
+
+- (NSData *)getData:(size_t *)remaining
 {
+    NSData *data = nil;
+    
+    size_t _remaining = buffers.size();
+    
+    if(buffers.size()) {
+
+        std::vector< std::vector<unsigned char> >::iterator it = buffers.begin();
+                
+        std::vector<unsigned char> buffer = *it;
+        
+        data = [[NSData alloc]initWithBytes:buffer.data() length:buffer.size()];
+        
+        buffers.erase(it);
+    }
+    
+    *remaining = _remaining;
+    
+    return data;
+}
+
+- (BOOL)setData:(CUTF8String)json
+{
+    BOOL success = FALSE;
+    
     bool parse = false;
     
     Json::Value root = Json::Value(Json::nullValue);
@@ -690,7 +1028,7 @@ didUpdateTXTRecordData:(NSData *)data
             
             if(TXTRecordData) {
              
-                BOOL success = [serv setTXTRecordData:TXTRecordData];
+                success = [netService setTXTRecordData:TXTRecordData];
             }
 
         }catch(...){
@@ -701,7 +1039,10 @@ didUpdateTXTRecordData:(NSData *)data
         
     }
 
+    return success;
 }
+
+#pragma mark NSNetServiceDelegate
 
 - (void)netServiceWillPublish:(NSNetService *)sender
 {
@@ -716,41 +1057,124 @@ didUpdateTXTRecordData:(NSData *)data
 
 - (void)netServiceDidPublish:(NSNetService *)sender
 {
+    props["isPublished"] = true;
+    
     [self copyServiceProperties:sender];
 }
 
-- (void)netServiceWillResolve:(NSNetService *)sender
-{
+/*
+ 
+ - (void)netServiceWillResolve:(NSNetService *)sender
+ {
 
-}
+ }
 
-- (void)netService:(NSNetService *)sender
-     didNotResolve:(NSDictionary<NSString *,NSNumber *> *)errorDict
-{
+ - (void)netService:(NSNetService *)sender
+      didNotResolve:(NSDictionary<NSString *,NSNumber *> *)errorDict
+ {
 
-}
+ }
 
-- (void)netServiceDidResolveAddress:(NSNetService *)sender
-{
+ - (void)netServiceDidResolveAddress:(NSNetService *)sender
+ {
 
-}
+ }
 
-- (void)netService:(NSNetService *)sender
-didUpdateTXTRecordData:(NSData *)data
-{
+ - (void)netService:(NSNetService *)sender
+ didUpdateTXTRecordData:(NSData *)data
+ {
 
-}
+ }
+ 
+ */
 
 - (void)netServiceDidStop:(NSNetService *)sender
 {
-
+    props["isPublished"] = false;
+    
+    [self copyServiceProperties:sender];
 }
+
+#if !CREATE_CONNECTION_STREAM
 
 - (void)netService:(NSNetService *)sender
 didAcceptConnectionWithInputStream:(NSInputStream *)inputStream
-      outputStream:(NSOutputStream *)outputStream
+      outputStream:(NSOutputStream *)outputStream 
+{
+
+}
+
+#endif
+
+#pragma mark NSStreamDelegate
+
+- (void)stream:(NSStream *)stream
+   handleEvent:(NSStreamEvent)event
 {
     
+    switch(event) {
+            
+        case NSStreamEventOpenCompleted:
+                        
+            break;
+            
+        case NSStreamEventHasBytesAvailable:
+            
+            if(stream == inputStream) {
+                
+                if(buffers.size() < BUFFER_MAX_SIZE) {
+
+                    NSLog(@"server:read:start");
+                    
+                    std::vector<unsigned char> buffer;
+                    UInt8 buf[BUFFER_BLOCK_SIZE];
+                    
+                    while (1) {
+
+                        NSInteger bytesRead = [inputStream read:buf maxLength:BUFFER_BLOCK_SIZE];
+
+                        if (bytesRead > 0) {
+                            
+                            size_t p = buffer.size();
+                            buffer.resize(p + bytesRead);
+                            memcpy(&buffer[p], buf, bytesRead);
+                            
+                        } else {
+                            if(bytesRead == 0) {
+                                
+                                buffers.push_back(buffer);
+                                
+                                NSLog(@"server:read:total:%ld", buffer.size());
+                            }
+                            break;
+                        }
+
+                    }
+
+                }
+                
+            }
+
+            break;
+            
+        case NSStreamEventEndEncountered:
+            [self close];
+            break;
+            
+        case NSStreamEventHasSpaceAvailable:
+            
+            break;
+        case NSStreamEventErrorOccurred:
+            [self close];
+            break;
+
+        case NSStreamEventNone:
+            
+            break;
+            
+        default:
+            break;
+    }
 }
 
 @end
@@ -799,7 +1223,16 @@ void g_bonjour_delegates_clear() {
     
 }
 
-#pragma mark function to run in main process
+typedef struct {
+    
+    Bonjour_Browser_Delegate *bonjour_delegate;
+    NSString *name;
+    NSString *hostName;
+    NSData *data;
+    
+}bounjour_browser_send_ctx_t;
+
+#pragma mark PA_RunInMainProcess
 
 void main_bounjour_start(Bonjour_Delegate *bonjour_delegate) {
     
@@ -813,6 +1246,14 @@ void main_bounjour_browser_start(Bonjour_Browser_Delegate *bonjour_delegate) {
     if(bonjour_delegate) {
         [bonjour_delegate start];
     }
+}
+
+void main_bounjour_browser_send(bounjour_browser_send_ctx_t *ctx) {
+
+    if(ctx) {
+        [ctx->bonjour_delegate send:ctx->data toService:ctx->name byHost:ctx->hostName];
+    }
+
 }
 
 #pragma mark Plugin Commands
@@ -847,7 +1288,9 @@ void Bonjour_Status(PA_PluginParameters params) {
                     bonjour_delegate = it->second;
                     
                     PA_ObjectRef properties = [bonjour_delegate getProperties];
+                    PA_CollectionRef services = [bonjour_delegate getServices];
                     
+                    ob_set_c(status, L"services", services);
                     ob_set_o(status, L"properties", properties);
                     ob_set_b(status, L"success", true);
 
@@ -922,14 +1365,13 @@ void Bonjour_Publish(PA_PluginParameters params) {
             
             Bonjour_Delegate *bonjour_delegate = [[Bonjour_Delegate alloc]initWithService:service];
             
+            [service release];
+            
             g_bonjour_delegates.insert(std::map<uint32_t, Bonjour_Delegate *>::value_type(i, bonjour_delegate));
             
             PA_RunInMainProcess((PA_RunInMainProcessProcPtr)main_bounjour_start, bonjour_delegate);
-            
-            [service publish];
-            
+                        
             PA_ObjectRef properties = [bonjour_delegate getProperties];
-            
             ob_set_o(status, L"properties", properties);
             
             ob_set_n(status, L"id", i);
@@ -994,6 +1436,8 @@ void Bonjour_Discover(PA_PluginParameters params) {
             
             Bonjour_Browser_Delegate *bonjour_delegate = [[Bonjour_Browser_Delegate alloc]initWithServiceBrowser:browser timeout:timeout];
             
+            [browser release];
+            
             g_bonjour_browser_delegates.insert(std::map<uint32_t, Bonjour_Browser_Delegate *>::value_type(i, bonjour_delegate));
             
             PA_RunInMainProcess((PA_RunInMainProcessProcPtr)main_bounjour_browser_start, bonjour_delegate);
@@ -1001,9 +1445,10 @@ void Bonjour_Discover(PA_PluginParameters params) {
             [browser searchForServicesOfType:type inDomain:domain];
             
             PA_ObjectRef properties = [bonjour_delegate getProperties];
+            PA_CollectionRef services = [bonjour_delegate getServices];
             
             ob_set_o(status, L"properties", properties);
-            
+            ob_set_c(status, L"services", services);
             ob_set_n(status, L"id", i);
             ob_set_b(status, L"success", true);
             ob_set_s(status, L"type", "discover");
@@ -1053,9 +1498,7 @@ void Bonjour_Update(PA_PluginParameters params) {
                     
                     if(ob_get_s(options, L"data", &data)){
                         
-                        [bonjour_delegate setData:data];
-                        
-                        ob_set_b(status, L"success", true);
+                        ob_set_b(status, L"success", [bonjour_delegate setData:data]);
                     }
                 }
             }
@@ -1126,4 +1569,151 @@ void Bonjour_Clear(PA_PluginParameters params) {
     }
     
     PA_ReturnObject(params, status);
+}
+
+void Bonjour_Send(PA_PluginParameters params) {
+    
+    PA_ObjectRef status = PA_CreateObject();
+    
+    PA_ObjectRef options = PA_GetObjectParameter(params, 1);
+    
+    ob_set_b(status, L"success", false);
+    
+    if(options){
+        
+        CUTF8String type;
+        
+        if(ob_get_s(options, L"type", &type)){
+            
+            uint32_t i = ob_get_n(options, L"id");
+            
+            ob_set_n(status, L"id", i);
+            ob_set_s(status, L"type", (const char *)type.c_str());
+            
+            if(type == (const uint8_t *)"discover"){
+                
+                PA_ObjectRef service = ob_get_o(options, L"service");
+                
+                if(service) {
+                
+                    CUTF8String _name, _hostName;
+                                        
+                    if(ob_get_s(service, L"hostName", &_hostName)){
+                        if(ob_get_s(service, L"name", &_name)){
+                          NSString *name = [[NSString alloc]initWithUTF8String:(const char *)_name.data()];
+                            if(name) {
+                                NSString *hostName = [[NSString alloc]initWithUTF8String:(const char *)_hostName.data()];
+                                if(hostName) {
+                                 
+                                    std::lock_guard<std::mutex> lock(g_bonjour_browser_delegate_mutex);
+                                                                        
+                                    Bonjour_Browser_Delegate *bonjour_delegate = NULL;
+                                    
+                                    std::map<uint32_t, Bonjour_Browser_Delegate *>::iterator it = g_bonjour_browser_delegates.find(i);
+                                            
+                                    if(it != g_bonjour_browser_delegates.end()) {
+                                        
+                                        bonjour_delegate = it->second;
+                                        
+                                        if([bonjour_delegate isReady]) {
+                                            
+                                            std::vector<unsigned char>buf;
+
+                                            size_t len = (size_t)PA_GetBlobParameter(params, 2, 0L);
+                                            
+                                            if(len) {
+                                                
+                                                buf.resize(len);
+                                                PA_GetBlobParameter(params, 2, &buf[0]);
+                                                
+                                                NSData *data = [[NSData alloc]initWithBytes:buf.data() length:buf.size()];
+                                                
+                                                if(data) {
+                                                    
+                                                    bounjour_browser_send_ctx_t ctx;
+                                                    
+                                                    ctx.name = name;
+                                                    ctx.hostName = hostName;
+                                                    ctx.data = data;
+                                                    ctx.bonjour_delegate = bonjour_delegate;
+                                                
+                                                    PA_RunInMainProcess((PA_RunInMainProcessProcPtr)main_bounjour_browser_send, &ctx);
+                                                    
+                                                    ob_set_b(status, L"success", true);
+                                                    
+                                                    [data release];
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    [hostName release];
+                                }
+                                
+                                [name release];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    PA_ReturnObject(params, status);
+}
+
+void Bonjour_Receive(PA_PluginParameters params) {
+    
+    PA_ObjectRef status = PA_CreateObject();
+    
+    PA_ObjectRef options = PA_GetObjectParameter(params, 1);
+    
+    ob_set_b(status, L"success", false);
+    
+    if(options){
+        
+        CUTF8String type;
+        
+        if(ob_get_s(options, L"type", &type)){
+            
+            uint32_t i = ob_get_n(options, L"id");
+            
+            ob_set_n(status, L"id", i);
+            ob_set_s(status, L"type", (const char *)type.c_str());
+
+            if(type == (const uint8_t *)"publish"){
+                
+                std::lock_guard<std::mutex> lock(g_bonjour_delegate_mutex);
+                
+                Bonjour_Delegate *bonjour_delegate = NULL;
+                
+                std::map<uint32_t, Bonjour_Delegate *>::iterator it = g_bonjour_delegates.find(i);
+                        
+                if(it != g_bonjour_delegates.end()) {
+                    
+                    bonjour_delegate = it->second;
+                    
+                    size_t remaining = 0;
+                    
+                    NSData *data = [bonjour_delegate getData:&remaining];
+
+                    if(data) {
+                        
+                        PA_SetBlobParameter(params, 2, (void *)[data bytes], (PA_long32)[data length]);
+
+                        [data release];
+                        
+                    }else{
+                        PA_SetBlobParameter(params, 2, (void *)"", (PA_long32)0L);
+                    }
+                    
+                    ob_set_n(status, L"remaining", remaining);
+                    ob_set_b(status, L"success", true);
+    
+                }
+            }
+        }
+    }
+    
+     PA_ReturnObject(params, status);
 }

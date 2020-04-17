@@ -26,6 +26,16 @@
             "theme": "Bonjour",
             "syntax": "Bonjour Clear(&J):J",
             "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Send(&J;&O):J",
+            "threadSafe": true
+        },
+        {
+            "theme": "Bonjour",
+            "syntax": "Bonjour Receive(&J;&O):J",
+            "threadSafe": true
         }
 	]
 }
