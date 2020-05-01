@@ -1005,17 +1005,17 @@ static void socket_callout(CFSocketRef s,
                 NSString *_key = [[NSString alloc]initWithUTF8String:key.c_str()];
                 
                 if(_key) {
-                    NSString *base64 = [[NSString alloc]initWithUTF8String:value.asString().c_str()];
-                    if(base64) {
-                        
-                        
-                        NSData *data = [[NSData alloc]initWithBase64EncodedString:base64 options:0];
-                        
-                        [txtDict setValue:data forKey:_key];
-                        if(data) {
-                            [data release];
+                    if(value.isString()) {
+                        NSString *base64 = [[NSString alloc]initWithUTF8String:value.asString().c_str()];
+                        if(base64) {
+                            NSData *data = [[NSData alloc]initWithBase64EncodedString:base64 options:0];
+                            if(data) {
+                                [txtDict setValue:data forKey:_key];
+                                [data release];
+                            }
+                            [base64 release];
                         }
-                        [base64 release];
+                        
                     }
                     [_key release];
                 }
