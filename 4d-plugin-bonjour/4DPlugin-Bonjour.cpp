@@ -926,9 +926,14 @@ static void socket_callout(CFSocketRef s,
     
     netService = nil;
         
+    /* CFRunLoopRemoveSource might crash during UnloadPlugins(). need to think about that */
+    /* *** CFHash() called with NULL *** */
     if(_ipv4socket) {
-        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv4socket, kCFRunLoopCommonModes);
-        CFRelease(_rls_ipv4socket);
+        if(_rls_ipv4socket) {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv4socket, kCFRunLoopCommonModes);
+            CFRelease(_rls_ipv4socket);
+        }
+
         CFSocketInvalidate(_ipv4socket);
         CFRelease(_ipv4socket);
     }
@@ -936,8 +941,11 @@ static void socket_callout(CFSocketRef s,
     _ipv4socket = nil;
     
     if(_ipv6socket) {
-        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv6socket, kCFRunLoopCommonModes);
-        CFRelease(_rls_ipv6socket);
+        if(_rls_ipv6socket) {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), _rls_ipv6socket, kCFRunLoopCommonModes);
+            CFRelease(_rls_ipv6socket);
+        }
+
         CFSocketInvalidate(_ipv6socket);
         CFRelease(_ipv6socket);
     }
