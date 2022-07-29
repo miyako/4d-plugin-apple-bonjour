@@ -17,15 +17,15 @@
 		<data>
 		Fxptel1wfnheaQxkl10rZZTUiKU=
 		</data>
+		<key>Resources/manifest.json</key>
+		<data>
+		0fTu8stYq1fA8Amq1sdlctADoX4=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
 		<key>QuickLook/Thumbnail.png</key>
 		<dict>
-			<key>hash</key>
-			<data>
-			hC+U8EqvyIRM1lLakHLfvl4V9Tc=
-			</data>
 			<key>hash2</key>
 			<data>
 			nGfrvibB5KlzvZgF4Bra+l0HpRloxismgTLePnOwCdk=
@@ -33,10 +33,6 @@
 		</dict>
 		<key>Resources/English.lproj/InfoPlist.strings</key>
 		<dict>
-			<key>hash</key>
-			<data>
-			O7DqvjURALkfvdg2aXJRt/XSzDg=
-			</data>
 			<key>hash2</key>
 			<data>
 			HvpRKlbJlv4OfOEChQEZWlv84Xp3WSbLQBGFlMRUAFw=
@@ -46,21 +42,20 @@
 		</dict>
 		<key>Resources/constants.xlf</key>
 		<dict>
-			<key>hash</key>
-			<data>
-			Fxptel1wfnheaQxkl10rZZTUiKU=
-			</data>
 			<key>hash2</key>
 			<data>
 			r0Z7h0Pf9uL0Tjf49xLNkFm2YAkf5Uzd/UeYnIR56wI=
 			</data>
 		</dict>
+		<key>Resources/manifest.json</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			xg/bfL5C5Kx36mkbcwuN2fvRFP+WgGLXhEUjOo+75N8=
+			</data>
+		</dict>
 		<key>Windows/Bonjour.4DX</key>
 		<dict>
-			<key>hash</key>
-			<data>
-			hL9gqzB1pAgChKZ1uj+Jqt43yxs=
-			</data>
 			<key>hash2</key>
 			<data>
 			ZCCEqtPmUM+2iJDxTvuZrd5mchV7dH5Z4RZvNF7YQT0=
@@ -68,23 +63,10 @@
 		</dict>
 		<key>Windows64/Bonjour.4DX</key>
 		<dict>
-			<key>hash</key>
-			<data>
-			zvoZ7ULt+O/aKx6NzgaqTillGNg=
-			</data>
 			<key>hash2</key>
 			<data>
 			xZ0isPdvytfz/ISMhvmTet0RKxwRCg6HeDepN7N2icI=
 			</data>
-		</dict>
-		<key>manifest.json</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			PtXFU4EPWlh38dwJSSFcXq26CSs=
-			</data>
-			<key>requirement</key>
-			<string>identifier manifest and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = Y69CWUC25B</string>
 		</dict>
 	</dict>
 	<key>rules</key>
