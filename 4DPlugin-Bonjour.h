@@ -14,6 +14,7 @@
 #include "4DPluginAPI.h"
 #include "4DPlugin-JSON.h"
 #include <mutex>
+#include <cmath>
 
 #include "json/json.h"
 #include <sys/socket.h>

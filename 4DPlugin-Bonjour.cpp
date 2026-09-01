@@ -12,6 +12,22 @@
 
 #pragma mark -
 
+/* ob_get_n() returns a plain double straight from caller-supplied JSON/4D input.
+   Casting a negative, NaN, or Inf double directly to uint32_t is undefined behavior
+   per the C++ standard (not a guaranteed wraparound). The 'id' field is only ever
+   used as a std::map<uint32_t,...> key here, so an invalid input just needs to map
+   to a value that can never collide with a real session id (0 is never assigned,
+   since every id-generation loop below starts at 1) rather than crash or corrupt
+   memory - but it should be validated explicitly rather than relying on whatever
+   the out-of-range conversion happens to produce. */
+static uint32_t Bonjour_GetSessionId(PA_ObjectRef options) {
+    double d = ob_get_n(options, L"id");
+    if (!std::isfinite(d) || d < 1.0 || d > 4294967295.0) {
+        return 0;
+    }
+    return (uint32_t)d;
+}
+
 void PluginMain(PA_long32 selector, PA_PluginParameters params) {
     
 	try
@@ -146,10 +162,9 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
                         w += bytesWritten;
                         
                     } else {
-                        [self close];
+                        /* write failed/blocked: stop retrying this event, remaining bytes are lost */
+                        break;
                     }
-                    
-                    break;
                 }
                 
                 NSLog(@"client:write:total:%ld", w);
@@ -174,6 +189,8 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
     
     if(!(props["isOpen"].asBool())) {
         
+        BOOL opened = NO;
+        
         for(NSNetService *service in services) {
             
             if(service) {
@@ -197,6 +214,8 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
                             [inputStream  open];
                         }
                         
+                        opened = YES;
+                        
                     }else{
                         NSLog(@"failed!getInputStream:outputStream:");
                     }
@@ -204,7 +223,12 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             }
         }
         
-        props["isOpen"] = true;
+        /* only latch isOpen when a matching service actually had a stream opened for it -
+           otherwise a mismatched name/hostName would permanently disable future sends
+           on this delegate, since nothing else ever resets isOpen back to false */
+        if(opened) {
+            props["isOpen"] = true;
+        }
     }
     
 }
@@ -672,7 +696,7 @@ didUpdateTXTRecordData:(NSData *)data
         props["name"] = name ? [name UTF8String] : "";
         props["domain"] = domain ? [domain UTF8String] : "";
         props["type"] = type ? [type UTF8String] : "";
-        props["hostName"] = hostName ? [type UTF8String] : "";
+        props["hostName"] = hostName ? [hostName UTF8String] : "";
         
         props["port"] = (int)port;
         props["includesPeerToPeer"] = includesPeerToPeer;
@@ -1280,9 +1304,9 @@ void Bonjour_Status(PA_PluginParameters params) {
         
         CUTF8String type;
         
-        if(ob_get_s(options, L"type", &type)){
+        if(ob_get_a(options, L"type", &type)){
             
-            uint32_t i = ob_get_n(options, L"id");
+            uint32_t i = Bonjour_GetSessionId(options);
             
             ob_set_n(status, L"id", i);
             ob_set_s(status, L"type", (const char *)type.c_str());
@@ -1341,10 +1365,12 @@ void Bonjour_Publish(PA_PluginParameters params) {
         
         CUTF8String _domain, _type, _name;
         
-        ob_get_s(options, L"domain", &_domain);
-        ob_get_s(options, L"type", &_type);
-        ob_get_s(options, L"name", &_name);
-        int port = ob_get_n(options, L"port");
+        ob_get_a(options, L"domain", &_domain);
+        ob_get_a(options, L"type", &_type);
+        ob_get_a(options, L"name", &_name);
+        
+        double _port = ob_get_n(options, L"port");
+        int port = (std::isfinite(_port) && _port >= 0.0 && _port <= 65535.0) ? (int)_port : 0;
         
         BOOL includesPeerToPeer = ob_get_b(options, L"includesPeerToPeer");
         
@@ -1359,25 +1385,36 @@ void Bonjour_Publish(PA_PluginParameters params) {
                                     name:name
                                     port:port];
         
+        [domain release];
+        [type release];
+        [name release];
+        
         if(service) {
             
             if(includesPeerToPeer) {
                 service.includesPeerToPeer = TRUE;
             }
             
-            std::lock_guard<std::mutex> lock(g_bonjour_delegate_mutex);
-            
             uint32_t i = 1;
+            Bonjour_Delegate *bonjour_delegate = nil;
             
-            while (g_bonjour_delegates.find(i) != g_bonjour_delegates.end()) {
-                i++;
+            {
+                std::lock_guard<std::mutex> lock(g_bonjour_delegate_mutex);
+                
+                while (g_bonjour_delegates.find(i) != g_bonjour_delegates.end()) {
+                    i++;
+                }
+                
+                bonjour_delegate = [[Bonjour_Delegate alloc]initWithService:service];
+                
+                g_bonjour_delegates.insert(std::map<uint32_t, Bonjour_Delegate *>::value_type(i, bonjour_delegate));
             }
             
-            Bonjour_Delegate *bonjour_delegate = [[Bonjour_Delegate alloc]initWithService:service];
+            /* lock released above before the synchronous main-thread round-trip, so a
+               concurrent Status/Send/Receive/Clear/Update call for a different id isn't
+               blocked for the duration of this call */
             
             [service release];
-            
-            g_bonjour_delegates.insert(std::map<uint32_t, Bonjour_Delegate *>::value_type(i, bonjour_delegate));
             
             PA_RunInMainProcess((PA_RunInMainProcessProcPtr)main_bounjour_start, bonjour_delegate);
                         
@@ -1390,7 +1427,7 @@ void Bonjour_Publish(PA_PluginParameters params) {
         }
         else
         {
-            ob_set_s(options, L"error", "failed: NSNetService initWithDomain:type:name:port:");
+            ob_set_s(status, L"error", "failed: NSNetService initWithDomain:type:name:port:");
         }
         
     }
@@ -1410,8 +1447,8 @@ void Bonjour_Discover(PA_PluginParameters params) {
         
         CUTF8String _domain, _type, _name;
         
-        ob_get_s(options, L"domain", &_domain);
-        ob_get_s(options, L"type", &_type);
+        ob_get_a(options, L"domain", &_domain);
+        ob_get_a(options, L"type", &_type);
         
         NSString *domain = [[NSString alloc]initWithUTF8String:(const char *)_domain.c_str()];
         NSString *type = [[NSString alloc]initWithUTF8String:(const char *)_type.c_str()];
@@ -1419,7 +1456,8 @@ void Bonjour_Discover(PA_PluginParameters params) {
         NSTimeInterval timeout = DEFAULT_RESOLVE_TIMEOUT;
         
         if(ob_is_defined(options, L"timeout")) {
-            timeout = abs(ob_get_n(options, L"timeout"));
+            double _timeout = ob_get_n(options, L"timeout");
+            timeout = std::isfinite(_timeout) ? fabs(_timeout) : DEFAULT_RESOLVE_TIMEOUT;
             timeout = timeout ? timeout : DEFAULT_RESOLVE_TIMEOUT;
             /* no timeout makes services sticky */
         }
@@ -1436,19 +1474,26 @@ void Bonjour_Discover(PA_PluginParameters params) {
                 browser.includesPeerToPeer = TRUE;
             }
             
-            std::lock_guard<std::mutex> lock(g_bonjour_browser_delegate_mutex);
-            
             uint32_t i = 1;
+            Bonjour_Browser_Delegate *bonjour_delegate = nil;
             
-            while (g_bonjour_browser_delegates.find(i) != g_bonjour_browser_delegates.end()) {
-                i++;
+            {
+                std::lock_guard<std::mutex> lock(g_bonjour_browser_delegate_mutex);
+                
+                while (g_bonjour_browser_delegates.find(i) != g_bonjour_browser_delegates.end()) {
+                    i++;
+                }
+                
+                bonjour_delegate = [[Bonjour_Browser_Delegate alloc]initWithServiceBrowser:browser timeout:timeout];
+                
+                g_bonjour_browser_delegates.insert(std::map<uint32_t, Bonjour_Browser_Delegate *>::value_type(i, bonjour_delegate));
             }
             
-            Bonjour_Browser_Delegate *bonjour_delegate = [[Bonjour_Browser_Delegate alloc]initWithServiceBrowser:browser timeout:timeout];
+            /* lock released above before the synchronous main-thread round-trip and the
+               searchForServicesOfType: call, so a concurrent Status/Send/Receive/Clear/Update
+               call for a different id isn't blocked for the duration of this call */
             
             [browser release];
-            
-            g_bonjour_browser_delegates.insert(std::map<uint32_t, Bonjour_Browser_Delegate *>::value_type(i, bonjour_delegate));
             
             PA_RunInMainProcess((PA_RunInMainProcessProcPtr)main_bounjour_browser_start, bonjour_delegate);
             
@@ -1466,8 +1511,11 @@ void Bonjour_Discover(PA_PluginParameters params) {
         }
         else
         {
-            ob_set_s(options, L"error", "failed: NSNetServiceBrowser init");
+            ob_set_s(status, L"error", "failed: NSNetServiceBrowser init");
         }
+        
+        [domain release];
+        [type release];
 
     }
     
@@ -1486,9 +1534,9 @@ void Bonjour_Update(PA_PluginParameters params) {
         
         CUTF8String type;
         
-        if(ob_get_s(options, L"type", &type)){
+        if(ob_get_a(options, L"type", &type)){
             
-            uint32_t i = ob_get_n(options, L"id");
+            uint32_t i = Bonjour_GetSessionId(options);
             
             ob_set_n(status, L"id", i);
             ob_set_s(status, L"type", (const char *)type.c_str());
@@ -1506,7 +1554,7 @@ void Bonjour_Update(PA_PluginParameters params) {
        
                     CUTF8String data;
                     
-                    if(ob_get_s(options, L"data", &data)){
+                    if(ob_get_a(options, L"data", &data)){
                         
                         ob_set_b(status, L"success", [bonjour_delegate setData:data]);
                     }
@@ -1530,9 +1578,9 @@ void Bonjour_Clear(PA_PluginParameters params) {
         
         CUTF8String type;
         
-        if(ob_get_s(options, L"type", &type)){
+        if(ob_get_a(options, L"type", &type)){
             
-            uint32_t i = ob_get_n(options, L"id");
+            uint32_t i = Bonjour_GetSessionId(options);
             
             ob_set_n(status, L"id", i);
             ob_set_s(status, L"type", (const char *)type.c_str());
@@ -1593,9 +1641,9 @@ void Bonjour_Send(PA_PluginParameters params) {
         
         CUTF8String type;
         
-        if(ob_get_s(options, L"type", &type)){
+        if(ob_get_a(options, L"type", &type)){
             
-            uint32_t i = ob_get_n(options, L"id");
+            uint32_t i = Bonjour_GetSessionId(options);
             
             ob_set_n(status, L"id", i);
             ob_set_s(status, L"type", (const char *)type.c_str());
@@ -1608,8 +1656,8 @@ void Bonjour_Send(PA_PluginParameters params) {
                 
                     CUTF8String _name, _hostName;
                                         
-                    if(ob_get_s(service, L"hostName", &_hostName)){
-                        if(ob_get_s(service, L"name", &_name)){
+                    if(ob_get_a(service, L"hostName", &_hostName)){
+                        if(ob_get_a(service, L"name", &_name)){
                           NSString *name = [[NSString alloc]initWithUTF8String:(const char *)_name.data()];
                             if(name) {
                                 NSString *hostName = [[NSString alloc]initWithUTF8String:(const char *)_hostName.data()];
@@ -1684,9 +1732,9 @@ void Bonjour_Receive(PA_PluginParameters params) {
         
         CUTF8String type;
         
-        if(ob_get_s(options, L"type", &type)){
+        if(ob_get_a(options, L"type", &type)){
             
-            uint32_t i = ob_get_n(options, L"id");
+            uint32_t i = Bonjour_GetSessionId(options);
             
             ob_set_n(status, L"id", i);
             ob_set_s(status, L"type", (const char *)type.c_str());
