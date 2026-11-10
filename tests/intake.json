@@ -1,0 +1,18 @@
+{
+  "repository": {
+    "full_name": "miyako/4d-plugin-apple-bonjour",
+    "default_branch": "master",
+    "sha": "ab1cf80dbb9d3c491677e36f2ba1aa5754117fd8"
+  },
+  "provenance": "Parent API intake repository.json; reconciled origin/HEAD and advertised HEAD",
+  "original_default_build": {
+    "run": 36969725098,
+    "job": 110721005177,
+    "step": 5,
+    "sha": "ab1cf80dbb9d3c491677e36f2ba1aa5754117fd8",
+    "step_log_sha256": "e42b147a89370a8a79f75c8c9d8b8495c107768cafa680ca26e195e36ee4f8fe",
+    "objroot": "test/Plugins",
+    "intermediate": "test/Plugins/Bonjour.build",
+    "xcbuilddata": "test/Plugins/XCBuildData"
+  }
+}

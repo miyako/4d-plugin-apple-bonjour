@@ -5,3 +5,6 @@
 
 # 4d-plugin-apple-bonjour
 Automatic discovery of devices and services on a local network with [Bonjour](https://developer.apple.com/bonjour/).
+
+See [manual Bump and Build workflows](.github/README.md) for source versioning,
+release safety, native policy, and offline regression commands.
