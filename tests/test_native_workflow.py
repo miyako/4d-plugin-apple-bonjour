@@ -1,6 +1,7 @@
 """Run real workflow Bash behind closed-PATH native/credential stubs."""
 
 import json
+import errno
 import os
 from pathlib import Path
 import re
@@ -40,6 +41,21 @@ if tool in ("python", "python3"):
                 args[1] == "preflight" and os.environ.get("FAIL_PREFLIGHT")):
             sys.exit(9)
     else:
+        if os.environ.get("LSTAT_FAILURE_PATH"):
+            runner = r"""
+import errno, os, pathlib, runpy, sys
+original = pathlib.Path.lstat
+def lstat(path, *args, **kwargs):
+    if os.path.abspath(path) == os.path.abspath(os.environ["LSTAT_FAILURE_PATH"]):
+        code = getattr(errno, os.environ["LSTAT_FAILURE_ERRNO"])
+        raise OSError(code, os.strerror(code), str(path))
+    return original(path, *args, **kwargs)
+pathlib.Path.lstat = lstat
+sys.argv = sys.argv[1:]
+sys.path.insert(0, str(pathlib.Path(sys.argv[0]).resolve().parent))
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+            os.execv(sys.executable, [sys.executable, "-c", runner, *args])
         os.execv(sys.executable, [sys.executable, *args])
 elif tool == "xcodebuild":
     assert args == ["-project", "Bonjour.xcodeproj", "-target", "Bonjour",
@@ -130,8 +146,6 @@ class NativeWorkflowTests(Fixture):
             "BUNDLE_PATH": str(native.BUNDLE), "GITHUB_ENV": str(self.checkout / "github-env"),
             "GITHUB_SHA": "a" * 40, "GH_TOKEN": "offline-only",
             "GITHUB_REPOSITORY": "miyako/4d-plugin-apple-bonjour",
-            "PYTHONDONTWRITEBYTECODE": "1", "POWERSHELL_TELEMETRY_OPTOUT": "1",
-            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
             "CERT_BASE64": "b2ZmbGluZQ==", "CERT_PASSWORD": "offline-only",
             "KEYCHAIN_PASSWORD": "offline-only", "APPLE_ID": "offline@example.invalid",
             "TEAM_ID": "OFFLINEONLY", "APP_PASSWORD": "offline-only",
@@ -218,6 +232,71 @@ class NativeWorkflowTests(Fixture):
         self.assertEqual(sum(call[:3] == ["xcrun", "notarytool", "submit"] for call in calls), 2)
         self.assertTrue(all("--strict" in call and "--deep" in call for call in calls
                             if call[0] == "codesign" and "--verify" in call))
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
+        self.assertFalse(list(self.checkout.rglob("__pycache__")))
+
+    def test_ancestor_git_marker_types_outside_output_walk_fail_before_first_delete(self):
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
+        first = self.checkout / native.FILES[0]
+        later = self.checkout / native.FILES[-1]
+        expected = {path: path.read_bytes() for path in (first, later)}
+        ancestors = ("test", "test/Plugins", str(native.BUNDLE),
+                     str(CONTENTS), str(CONTENTS / "_CodeSignature"))
+        for ancestor in ancestors:
+            marker = self.checkout / ancestor / ".git"
+            for kind in ("file", "directory", "symlink", "dangling-symlink", "fifo"):
+                with self.subTest(ancestor=ancestor, kind=kind):
+                    if kind == "file":
+                        marker.write_bytes(b"nested Git marker")
+                    elif kind == "directory":
+                        marker.mkdir()
+                    elif kind in ("symlink", "dangling-symlink"):
+                        marker.symlink_to(first if kind == "symlink" else self.root / "absent")
+                    else:
+                        os.mkfifo(marker)
+                    try:
+                        self.log.unlink(missing_ok=True)
+                        result = self.mac_step("build macOS plugin (universal)", success=False)
+                        self.assertIn("nested Git marker", result.stderr)
+                        self.assertFalse(any(call[0] != "python3" for call in self.calls()))
+                        for path, raw in expected.items():
+                            self.assertEqual(path.read_bytes(), raw)
+                    finally:
+                        if kind == "directory":
+                            marker.rmdir()
+                        else:
+                            marker.unlink()
+        # The fixture checkout's own legitimate .git directory is allowed.
+        self.assertTrue((self.checkout / ".git").is_dir())
+        self.build()
+        self.assertEqual(first.read_bytes(), b"fresh-macos")
+        for path, raw in self.protected.items():
+            self.assertEqual(path.read_bytes(), raw)
+
+    def test_ancestor_marker_probe_permission_io_notdirectory_are_fatal_before_delete(self):
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
+        first = self.checkout / native.FILES[0]
+        later = self.checkout / native.FILES[-1]
+        expected = {path: path.read_bytes() for path in (first, later)}
+        for ancestor in ("test/Plugins", str(CONTENTS / "_CodeSignature")):
+            for error in ("EACCES", "EIO", "ENOTDIR"):
+                with self.subTest(ancestor=ancestor, error=error):
+                    self.env.update(LSTAT_FAILURE_PATH=ancestor + "/.git",
+                                    LSTAT_FAILURE_ERRNO=error)
+                    try:
+                        self.log.unlink(missing_ok=True)
+                        result = self.mac_step("build macOS plugin (universal)", success=False)
+                        self.assertIn(f"Errno {getattr(errno, error)}", result.stderr)
+                        self.assertIn(ancestor + "/.git", result.stderr)
+                        self.assertFalse(any(call[0] != "python3" for call in self.calls()))
+                        for path, raw in expected.items():
+                            self.assertEqual(path.read_bytes(), raw)
+                    finally:
+                        self.env.pop("LSTAT_FAILURE_PATH")
+                        self.env.pop("LSTAT_FAILURE_ERRNO")
+        self.build()
+        self.assertEqual(first.read_bytes(), b"fresh-macos")
+        self.assertFalse(list(self.checkout.rglob("__pycache__")))
 
     def test_pipeline_uses_selected_source_version_not_the_intake_literal(self):
         before, version = self.env["VERSION"], "3.2.1"

@@ -90,6 +90,12 @@ or Thumbnail.png. Before its first deletion it validates **all** targets,
 ancestors, descendants, regular/directory types, readability, links, nested Git
 markers, and selected/indexed inputs. An invalid late target leaves earlier
 bytes intact.
+Every traversed directory below the legitimate checkout root is probed with
+`lstat` for a `.git` marker, including ancestors outside the output subtree.
+Any marker type (including directories, dangling links, and FIFOs) is rejected;
+only actual ENOENT means absence. Permission, EIO, and ENOTDIR failures abort
+before the first deletion. The checkout root's own Git metadata is not treated
+as a nested repository.
 
 Preflight requires a globally clean checkout, including ignored unexpected
 files. Final validation instead retains freshly overwritten **tracked**
@@ -149,6 +155,11 @@ It executes the actual workflow Bash and actual helpers/hooks; no real native,
 created under `tests/.helper-*` and removed after each test. Original fixtures
 are pinned to intake; live expectations derive from selected source, allowing
 the entire suite to run on a genuinely bumped child.
+The native entrypoint disables bytecode before local imports: correctness does
+not depend on workflow or harness `PYTHONDONTWRITEBYTECODE` or `python -B`.
+Regressions explicitly omit both protections while running metadata and extracted
+native phases, then execute real final publication against fake gh with exact
+retained-byte assertions. Caches are neither exempted nor deleted to pass guards.
 
 Reference adaptations are from hash-verified immutable UTI
 `5decf4be07f8297d256dfb559ef9466525fe9045` and libarchive

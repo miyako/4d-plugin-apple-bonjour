@@ -12,6 +12,7 @@ from unittest.mock import patch
 from helper_support import Fixture, GitFixture, ROOT, source
 import native
 import release
+import test_native_workflow as native_workflow
 
 
 TAG, SHA = "v3.2.1", "a" * 40
@@ -287,6 +288,61 @@ class PublicationCLITests(GitFixture):
         for path in release.asset_names(self.version):
             (self.local / path).write_bytes(b"fresh package")
         return data
+
+    def test_actual_entrypoints_no_bytecode_environment_full_native_and_final_publish(self):
+        self.env.pop("PYTHONDONTWRITEBYTECODE")
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
+        for tool in ("xcodebuild", "lipo", "codesign", "security", "ditto", "hdiutil", "xcrun"):
+            executable = self.tools / tool
+            executable.write_text(native_workflow.STUB.replace("PYTHON", sys.executable))
+            executable.chmod(0o755)
+        for tool in ("bash", "grep", "head", "sed"):
+            (self.tools / tool).symlink_to(shutil.which(tool))
+        self.env.update(
+            PRODUCT_NAME="Bonjour", BASE_DIR="test", MACOS_DEPLOYMENT_TARGET="11.0",
+            VERSION=self.version, SOURCE_VERSION=self.version,
+            BUNDLE_PATH=str(native.BUNDLE), KEYCHAIN_PATH=str(self.root / "offline.keychain"),
+            GITHUB_ENV=str(self.root / "native-env"), NATIVE_LOG=str(self.root / "native.jsonl"),
+        )
+        canonical = json.loads((ROOT / "tests/intake.json").read_text())["repository"]["full_name"]
+        self.env["GITHUB_REPOSITORY"] = canonical
+        result = self.command("preflight")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.cli(".github/scripts/source_version.py")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), self.version)
+        workflow = native_workflow.yaml.safe_load(native_workflow.WORKFLOW.read_text())
+        steps = workflow["jobs"]["build-macos"]["steps"]
+        for name in ("build macOS plugin (universal)", "verify universal binary", "codesign",
+                     "package, notarize & staple"):
+            script = next(step["run"] for step in steps if step.get("name") == name)
+            self.assertNotIn("${{", script)
+            self.assertNotIn(" -B", script)
+            result = subprocess.run(
+                ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                cwd=self.local, env=self.env, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(list(self.local.rglob("__pycache__")), name)
+        expected = {str(path): (self.local / path).read_bytes()
+                    for path in (*native.FILES, *native.PRESERVED)}
+        expected.update({name: (self.local / name).read_bytes()
+                         for name in release.asset_names(self.version)})
+        expected["test/Plugins/XCBuildData/build.db"] = (
+            self.local / "test/Plugins/XCBuildData/build.db").read_bytes()
+        self.log.unlink()
+        script = steps[-1]["run"]
+        self.assertNotIn(" -B", script)
+        result = subprocess.run(
+            ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+            cwd=self.local, env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any(call["method"] == "POST" for call in self.calls()))
+        self.assertFalse(list(self.local.rglob("__pycache__")))
+        for path, raw in expected.items():
+            self.assertEqual((self.local / path).read_bytes(), raw)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.sha)
 
     def test_actual_cli_clean_preflight_then_tracked_native_dirt_publish_retains_exact_bytes(self):
         canonical = json.loads((ROOT / "tests/intake.json").read_text())["repository"]["full_name"]

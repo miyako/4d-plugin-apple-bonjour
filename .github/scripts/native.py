@@ -1,11 +1,15 @@
 """Rebuild only original Default outputs; preserve all other selected inputs."""
 
 import argparse
+import errno
 import os
 from pathlib import Path
 import re
 import shutil
 import stat
+import sys
+
+sys.dont_write_bytecode = True
 
 
 PRODUCT = "Bonjour"
@@ -41,8 +45,15 @@ def generated(path):
 def node(path):
     try:
         return path.lstat()
-    except FileNotFoundError:
-        return None
+    except OSError as error:
+        if error.errno == errno.ENOENT:
+            return None
+        raise
+
+
+def reject_git_marker(directory):
+    if node(directory / ".git") is not None:
+        raise ValueError(f"Refusing nested Git marker: {directory / '.git'}")
 
 
 def validate_paths(paths):
@@ -56,6 +67,8 @@ def validate_paths(paths):
             info = node(parent)
             if info is not None and stat.S_ISLNK(info.st_mode):
                 raise ValueError(f"Refusing symlink output: {parent}")
+            if info is not None and stat.S_ISDIR(info.st_mode):
+                reject_git_marker(parent)
             if parent != path and info is not None and not stat.S_ISDIR(info.st_mode):
                 raise ValueError(f"Output ancestor is not a directory: {parent}")
         if not path.resolve().is_relative_to(root):
@@ -74,6 +87,7 @@ def validate_paths(paths):
             if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise ValueError(f"Refusing nonregular output: {current}")
             if stat.S_ISDIR(info.st_mode):
+                reject_git_marker(current)
                 if not info.st_mode & 0o444 or not info.st_mode & 0o111:
                     raise ValueError(f"Unreadable output directory: {current}")
                 pending.extend(current.iterdir())
