@@ -56,6 +56,12 @@ def reject_git_marker(directory):
         raise ValueError(f"Refusing nested Git marker: {directory / '.git'}")
 
 
+def validate_directory_access(directory, info):
+    if not info.st_mode & 0o444 or not info.st_mode & 0o111 \
+            or not os.access(directory, os.R_OK | os.X_OK):
+        raise ValueError(f"Unreadable or unsearchable output directory: {directory}")
+
+
 def validate_paths(paths):
     root = Path.cwd().resolve()
     for path in map(Path, paths):
@@ -68,6 +74,7 @@ def validate_paths(paths):
             if info is not None and stat.S_ISLNK(info.st_mode):
                 raise ValueError(f"Refusing symlink output: {parent}")
             if info is not None and stat.S_ISDIR(info.st_mode):
+                validate_directory_access(parent, info)
                 reject_git_marker(parent)
             if parent != path and info is not None and not stat.S_ISDIR(info.st_mode):
                 raise ValueError(f"Output ancestor is not a directory: {parent}")
@@ -87,9 +94,8 @@ def validate_paths(paths):
             if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise ValueError(f"Refusing nonregular output: {current}")
             if stat.S_ISDIR(info.st_mode):
+                validate_directory_access(current, info)
                 reject_git_marker(current)
-                if not info.st_mode & 0o444 or not info.st_mode & 0o111:
-                    raise ValueError(f"Unreadable output directory: {current}")
                 pending.extend(current.iterdir())
             else:
                 if not info.st_mode & 0o444:

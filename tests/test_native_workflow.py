@@ -45,12 +45,19 @@ if tool in ("python", "python3"):
             runner = r"""
 import errno, os, pathlib, runpy, sys
 original = pathlib.Path.lstat
+original_access = os.access
+def access(path, mode, *args, **kwargs):
+    denied = os.environ.get("ACCESS_FAILURE_PATH")
+    if denied and os.path.abspath(path) == os.path.abspath(denied):
+        return False
+    return original_access(path, mode, *args, **kwargs)
 def lstat(path, *args, **kwargs):
     if os.path.abspath(path) == os.path.abspath(os.environ["LSTAT_FAILURE_PATH"]):
         code = getattr(errno, os.environ["LSTAT_FAILURE_ERRNO"])
         raise OSError(code, os.strerror(code), str(path))
     return original(path, *args, **kwargs)
 pathlib.Path.lstat = lstat
+os.access = access
 sys.argv = sys.argv[1:]
 sys.path.insert(0, str(pathlib.Path(sys.argv[0]).resolve().parent))
 runpy.run_path(sys.argv[0], run_name="__main__")
@@ -200,6 +207,26 @@ class NativeWorkflowTests(Fixture):
     def build(self):
         self.mac_step("build macOS plugin (universal)")
 
+    def seed_cleanup_outputs(self, label):
+        expected = {}
+        for relative in native.FILES:
+            path = self.checkout / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw = (label + ":" + str(relative)).encode()
+            path.write_bytes(raw)
+            expected[path] = raw
+        return expected
+
+    def assert_restored_native_positive(self):
+        self.log.unlink(missing_ok=True)
+        self.build()
+        self.mac_step("verify universal binary")
+        self.assertTrue(any(call[0] == "xcodebuild" for call in self.calls()))
+        self.assertEqual((self.contents / "MacOS/Bonjour").read_bytes(), b"fresh-macos")
+        for path, raw in self.protected.items():
+            self.assertEqual(path.read_bytes(), raw)
+        self.assertFalse(list(self.checkout.rglob("__pycache__")))
+
     def pipeline(self):
         for job in ("version", "build-macos"):
             for step in self.jobs[job]["steps"]:
@@ -238,14 +265,13 @@ class NativeWorkflowTests(Fixture):
     def test_ancestor_git_marker_types_outside_output_walk_fail_before_first_delete(self):
         self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
         first = self.checkout / native.FILES[0]
-        later = self.checkout / native.FILES[-1]
-        expected = {path: path.read_bytes() for path in (first, later)}
         ancestors = ("test", "test/Plugins", str(native.BUNDLE),
                      str(CONTENTS), str(CONTENTS / "_CodeSignature"))
         for ancestor in ancestors:
             marker = self.checkout / ancestor / ".git"
             for kind in ("file", "directory", "symlink", "dangling-symlink", "fifo"):
                 with self.subTest(ancestor=ancestor, kind=kind):
+                    expected = self.seed_cleanup_outputs(ancestor + ":" + kind)
                     if kind == "file":
                         marker.write_bytes(b"nested Git marker")
                     elif kind == "directory":
@@ -266,21 +292,15 @@ class NativeWorkflowTests(Fixture):
                             marker.rmdir()
                         else:
                             marker.unlink()
-        # The fixture checkout's own legitimate .git directory is allowed.
-        self.assertTrue((self.checkout / ".git").is_dir())
-        self.build()
-        self.assertEqual(first.read_bytes(), b"fresh-macos")
-        for path, raw in self.protected.items():
-            self.assertEqual(path.read_bytes(), raw)
+                    self.assertTrue((self.checkout / ".git").is_dir())
+                    self.assert_restored_native_positive()
 
     def test_ancestor_marker_probe_permission_io_notdirectory_are_fatal_before_delete(self):
         self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
-        first = self.checkout / native.FILES[0]
-        later = self.checkout / native.FILES[-1]
-        expected = {path: path.read_bytes() for path in (first, later)}
         for ancestor in ("test/Plugins", str(CONTENTS / "_CodeSignature")):
             for error in ("EACCES", "EIO", "ENOTDIR"):
                 with self.subTest(ancestor=ancestor, error=error):
+                    expected = self.seed_cleanup_outputs(ancestor + ":" + error)
                     self.env.update(LSTAT_FAILURE_PATH=ancestor + "/.git",
                                     LSTAT_FAILURE_ERRNO=error)
                     try:
@@ -294,9 +314,39 @@ class NativeWorkflowTests(Fixture):
                     finally:
                         self.env.pop("LSTAT_FAILURE_PATH")
                         self.env.pop("LSTAT_FAILURE_ERRNO")
-        self.build()
-        self.assertEqual(first.read_bytes(), b"fresh-macos")
-        self.assertFalse(list(self.checkout.rglob("__pycache__")))
+                    self.assert_restored_native_positive()
+
+    def test_all_enclosing_ancestors_require_read_and_search_before_marker_probe(self):
+        self.assertNotIn("PYTHONDONTWRITEBYTECODE", self.env)
+        ancestors = ("test", "test/Plugins", str(CONTENTS / "Resources/English.lproj"),
+                     str(CONTENTS / "_CodeSignature"))
+        for ancestor in ancestors:
+            directory = self.checkout / ancestor
+            for mode in (0o111, 0o444, 0o755):
+                with self.subTest(ancestor=ancestor, mode=oct(mode)):
+                    expected = self.seed_cleanup_outputs(ancestor + ":" + oct(mode))
+                    original_mode = directory.stat().st_mode & 0o777
+                    self.log.unlink(missing_ok=True)
+                    # The error injector proves access validation precedes the marker probe.
+                    self.env.update(LSTAT_FAILURE_PATH=ancestor + "/.git",
+                                    LSTAT_FAILURE_ERRNO="EIO")
+                    if mode == 0o755:
+                        self.env["ACCESS_FAILURE_PATH"] = ancestor
+                    try:
+                        directory.chmod(mode)
+                        result = self.mac_step("build macOS plugin (universal)", success=False)
+                    finally:
+                        directory.chmod(original_mode)
+                        self.env.pop("LSTAT_FAILURE_PATH")
+                        self.env.pop("LSTAT_FAILURE_ERRNO")
+                        self.env.pop("ACCESS_FAILURE_PATH", None)
+                    self.assertIn("Unreadable or unsearchable output directory: " + ancestor,
+                                  result.stderr)
+                    self.assertNotIn("Errno 5", result.stderr)
+                    self.assertFalse(any(call[0] != "python3" for call in self.calls()))
+                    for path, raw in expected.items():
+                        self.assertEqual(path.read_bytes(), raw)
+                    self.assert_restored_native_positive()
 
     def test_pipeline_uses_selected_source_version_not_the_intake_literal(self):
         before, version = self.env["VERSION"], "3.2.1"

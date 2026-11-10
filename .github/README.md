@@ -96,6 +96,13 @@ Any marker type (including directories, dangling links, and FIFOs) is rejected;
 only actual ENOENT means absence. Permission, EIO, and ENOTDIR failures abort
 before the first deletion. The checkout root's own Git metadata is not treated
 as a nested repository.
+Every enclosing directory must also have read **and** search permission bits
+and pass `os.access(R_OK | X_OK)` before its marker probe. This includes
+`test/`, `test/Plugins`, and late bundle-leaf parents, not just output subtrees
+or immediate deletion parents. Search-only ancestors must not permit cleanup
+to delete outputs before a later native failure. Each permission/marker/error
+regression restores the same fixture and proves a fresh native positive after
+that individual negative, retaining all generated-leaf snapshots on rejection.
 
 Preflight requires a globally clean checkout, including ignored unexpected
 files. Final validation instead retains freshly overwritten **tracked**
